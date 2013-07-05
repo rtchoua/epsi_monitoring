@@ -1,0 +1,65 @@
+CC=gcc
+CFLAGS=-g
+CXX=g++
+CXXFLAGS:=-g 
+
+USE_XMGRACE=yes
+USE_NETCDF=no
+USE_ADIOS=yes
+USE_HDF5=yes
+USE_VTK=yes
+
+# XMGRACE settings. It must be present to build plotter
+ifeq ($(USE_XMGRACE), yes)
+    XMGRACE=/sw/xk6/grace/5.1.22/sles11.1_gnu4.3.4
+    INC:=${INC} -I${XMGRACE}/include
+    LIBS:=${LIBS} -L${XMGRACE}/lib -lgrace_np
+    CFLAGS:=${CFLAGS} -DXMGRACE
+    OBJ_XMGRACE=graceplot.o
+    SRC_XMGRACE=graceplot.c
+endif
+    
+
+# NETCDF settings
+ifeq ($(USE_NETCDF), yes)
+    NETCDF=/sw/xt5/netcdf/3.6.2/sles10.1_gnu4.2.0
+    INC:=${INC} -I${NETCDF}/include -I..
+    LIBS:=${LIBS} -L${NETCDF}/lib -lnetcdf
+    CFLAGS:=${CFLAGS} -DNETCDF
+    OBJ_NETCDF=readcdf.o
+    SRC_NETCDF=readcdf.c
+endif
+
+# ADIOS settings
+ifeq ($(USE_ADIOS), yes)
+    ADIOS=/sw/xk6/adios/1.4.1/sles11.1_gnu4.7.2_readonly
+    ADIOS_INC=$(shell ${ADIOS}/bin/adios_config -c -r -s)
+    ADIOS_LIB=$(shell ${ADIOS}/bin/adios_config -l -r -s)
+    INC:=${INC} ${ADIOS_INC}
+    LIBS:=${LIBS} ${ADIOS_LIB}
+    CFLAGS:=${CFLAGS} -DADIOS -D_NOMPI -DADIOS_USE_READ_API_1
+    OBJ_ADIOS=readadiosbp.o
+    SRC_ADIOS=readadiosbp.c
+endif
+
+# HDF5 settings
+ifeq ($(USE_HDF5), yes)
+    HDF5_DIR=/sw/xk6/hdf5/1.8.7/cle4.0_gnu4.5.3
+    INC:=${INC} -I${HDF5_DIR}/include 
+    LIBS:=${LIBS} -L${HDF5_DIR}/lib -lhdf5_hl -lhdf5 -L/sw/xk6/szip/2.1/sles11.1_gnu4.5.3/lib -lz -lsz -lm
+    CFLAGS:=${CFLAGS} -DHDF5
+    OBJ_HDF5=readhdf5.o
+    SRC_HDF5=readhdf5.c
+endif
+
+# VTK settings
+ifeq ($(USE_VTK), yes)
+    VTK=/sw/xk6/vtk/5.2.1/sles11.1_gnu4.3.4_offscreen
+    VTK_INC:=${INC} -I${VTK}/include/vtk-5.2
+    VTK_LIBS:=${LIBS} -L${VTK}/lib/vtk-5.2 -lvtkRendering -lvtkGraphics -lvtkverdict -lvtkImaging -lvtkIO -lvtkFiltering -lvtkCommon -lvtkHybrid -lvtkRendering -lpthread -lm -lvtkDICOMParser -lvtkNetCDF -lvtkmetaio -lvtksqlite -lvtkpng -lvtktiff -lvtkzlib -lvtkjpeg -lvtkexpat -lvtksys -ldl -lvtkftgl -lvtkfreetype -lvtkexoIIc ${VTK}/Mesa-7.3/lib64/libGL.a ${VTK}/Mesa-7.3/lib64/libOSMesa.a -L/usr/X11/lib64 -lXt -lSM -lICE -lX11 -lXext
+    VTK_CFLAGS=-DVTK
+    VTK_CXXFLAGS=-DVTK
+    OBJ_VTK=vtk-common.o vtk-plot2D.o
+    SRC_VTK=vtk-common.cxx vtk-plot2D.cxx
+endif
+

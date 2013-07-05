@@ -1,0 +1,88 @@
+#CC=OMPI_CC=gcc mpicc
+CC=gcc
+CFLAGS=-g -Wall -O0 
+#CXX=OMPI_CXX=g++ mpiCC
+CXX=g++
+CXXFLAGS:=-g -Wno-deprecated
+#LDFLAGS=-static
+#LDFLAGS=-pg
+
+USE_XMGRACE=yes
+USE_NETCDF=no
+USE_ADIOS=yes
+USE_HDF5=no
+USE_VTK=yes
+USE_ESIMON=yes
+
+# ESIMON settings
+ifeq ($(USE_ESIMON),yes)
+    CURL_CONFIG=/ccs/proj/e2e/rbarreto/mycurl.sith/bin/curl-config
+    CURL_LIBS = $(shell $(CURL_CONFIG) --libs) -lldap
+    MYSQL_CFLAGS=-I/usr/include/mysql -g -pipe -m64 -D_GNU_SOURCE -D_FILE_OFFSET_BITS=64 -D_LARGEFILE_SOURCE -fno-strict-aliasing
+    MYSQL_LDFLAGS=-L/usr/lib64/mysql -lmysqlclient -lz -lcrypt -lnsl -lm -L/usr/lib64 -lssl -lcrypto
+    ESIMON_DIR=/ccs/proj/e2e/rbarreto/esimmon_api/c_api
+    ESIMON_INC=-I${ESIMON_DIR}
+    ESIMON_LIBS=-L${ESIMON_DIR} -lesimmon ${CURL_LIBS} ${MYSQL_LDFLAGS}
+    INC:=${ESIMON_INC} 
+    LIBS:=${ESIMON_LIBS} 
+endif
+
+# GRACE settings. It must be present to build plotter
+ifeq ($(USE_XMGRACE), yes)
+    XMGRACE=/sw/sith/grace/5.1.21/centos5.5_gnu4.1.2
+    INC:=${INC} -I${XMGRACE}/include
+    LIBS:=${LIBS} -L${XMGRACE}/lib -lgrace_np
+    CFLAGS:=${CFLAGS} -DXMGRACE
+    OBJ_XMGRACE=graceplot.o
+    SRC_XMGRACE=graceplot.c
+endif
+
+# NETCDF settings
+ifeq ($(USE_NETCDF), yes)
+    NETCDF=/sw/sith/netcdf/3.6.2/centos5.5_gnu4.4.4
+    INC:=${INC} -I${NETCDF}/include
+    LIBS:=${LIBS} ${NETCDF}/lib/libnetcdf.a
+    CFLAGS:=${CFLAGS} -DNETCDF
+    OBJ_NETCDF=readcdf.o
+    SRC_NETCDF=readcdf.c
+endif
+
+# ADIOS settings
+ifeq ($(USE_ADIOS), yes)
+    #ADIOS=/ccs/proj/e2e/rbarreto/ADIOS/sith.pgi
+    #ADIOS=/sw/sith/adios/1.2.1/centos5.5_gnu4.4.4
+    #ADIOS=/sw/redhat6/adios/1.4.1/rhel6_gnu4.7.1
+    ADIOS=/ccs/proj/e2e/rbarreto/ADIOS/sith.pgi.1.4.1
+    ADIOS_INC=$(shell $(ADIOS)/bin/adios_config -c -r -s)
+    ADIOS_LIB=$(shell $(ADIOS)/bin/adios_config -l -r -s)
+    INC:=${INC} ${ADIOS_INC}
+    LIBS:=${LIBS} ${ADIOS_LIB} 
+    CFLAGS:=${CFLAGS} -DADIOS -D_NOMPI -DADIOS_USE_READ_API_1
+    OBJ_ADIOS=readadiosbp.o
+    SRC_ADIOS=readadiosbp.c
+endif
+
+# HDF5 settings
+ifeq ($(USE_HDF5), yes)
+    HDF5_DIR=/sw/sith/hdf5/1.8.5/centos5.5_gnu4.4.4
+    INC:=${INC} -I${HDF5_DIR}/include -I${OMPI_DIR}/include
+    LIBS:=${LIBS} -L${HDF5_DIR}/lib -lhdf5 -L/sw/sith/szip/2.1/centos5.5_gnu4.4.4/lib -lz -lsz -lm
+    CFLAGS:=${CFLAGS} -DHDF5
+    OBJ_HDF5=readhdf5.o
+    SRC_HDF5=readhdf5.c
+endif
+
+# VTK settings
+ifeq ($(USE_VTK), yes)
+    VTK=/sw/sith/vtk/5.2.1/centos5.5_gnu4.1.2_offscreen
+    VTK_INC=-I${VTK}/include/vtk-5.2
+    VTK_LIBS=-L${VTK}/lib/vtk-5.2 -L${VTK}/ffmpeg/lib -lvtkHybrid -lvtkRendering -lvtkGraphics -lvtkverdict -lvtkImaging -lvtkIO -lvtkFiltering -lvtkCommon -lpthread -lm -lvtkDICOMParser -lvtkNetCDF -lvtkmetaio -lvtksqlite -lvtkpng -lvtktiff -lvtkzlib -lvtkjpeg -lvtkexpat -lvtksys -ldl -lvtkftgl -lvtkfreetype -lvtkexoIIc ${VTK}/Mesa-7.3.gnu/lib64/libGL.a ${VTK}/Mesa-7.3.gnu/lib64/libOSMesa.a -lXt -lXext
+    #-lXt -lSM -lICE -lX11 -lXext 
+    VTK_CFLAGS=-DVTK
+    VTK_CXXFLAGS=-DVTK
+    #VTK_LDFLAGS=${VTK}/ffmpeg/lib/libavcodec.so.51 ${VTK}/ffmpeg/lib/libavformat.so.50 ${VTK}/ffmpeg/lib/libavutil.so.49 
+    VTK_LDFLAGS=
+    OBJ_VTK=vtk-common.o vtk-plot2D.o 
+    SRC_VTK=vtk-common.cxx vtk-plot2D.cxx
+endif
+
