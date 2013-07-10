@@ -15,6 +15,7 @@
 #   include "vtk-graph.h"
 #endif
 
+#include "adios_read.h"
 #include "dirutil.h"
 #include <dirent.h>
 
@@ -30,9 +31,8 @@
 #include <math.h>    
 #include <libgen.h>   
 #include <regex.h>   
-#include <fnmatch.h> 
+#include <fnmatch.h>  
 #include "adios_read.h"
-#include "adios_mesh.h"
 
 // Global variables (for main.c only)
 // Values from the arguments or defaults
@@ -101,6 +101,7 @@ bool transpose;            // use transpose of v in 2D plots
 // Other global variables
 int err;
 Array x1;// = Array_new(undefArray); // we do not know the type yet
+//Array y1;// = Array_new(undefArray); // we do not know the type yet
 Array x2;// = Array_new(undefArray); // we do not know the type yet
 Array y2;// = Array_new(undefArray); // we do not know the type yet
 char *prgname; /* argv[0] */
@@ -118,6 +119,10 @@ int  n1Dvars = 0; // number of variables actually plotted in 1D; used for multip
 struct timeval tp;
 
 // Global code variables
+// For 2D code
+int nphi; 
+int first_data_read;
+Array nphi_v;
 // For 1D code
 // Length of psi to know which variables to plot against psi
 // Plot other 1d vars vs a newly created array from 1-npoints
@@ -151,27 +156,10 @@ struct estruct * e = &e1;
 #endif
 
 // Prototypes
-int do1DWork();
 int find_next_step_string(char *str, char *orig);
 int find_next_step(char *str, char **retstr);
 static void parseDimSpec(char *str, int *dims, bool allow_time, long *tDimidx, long *tValue, long *tStepping);
 static void parseRGB(char *str, int rgb[3]);
-
-// Parse schema functions
-int parseschema(char *f);
-struct schema_mesh_struct * meshs;
-int mesh_count;
-enum ADIOS_FLAG all_unique_mesh_names;
-#define MAXVARNUM 100
-char varlist[MAXVARNUM][256];
-char varsonmesh[MAXVARNUM][256];
-char meshes[MAXVARNUM][256];
-#define MAXCELLSETS 10
-
-// Schema attributes
-// =================
-char * schema_M_attr;
-char * schema_m_attr;
 
 int opt;
 
@@ -343,8 +331,8 @@ static void setDefaultsAfterArgs(void) {
   */
 static void processDimSpecs(void) {
     // Use SCHEMA 
-    //FIXME: These values are hardcode for XGC1 and should be adjusted
-    //before plotting using the schema
+    //TODO: hardcoding some info based on plotter cmd for XGC1 workflow
+    // will need to be changed & generalized
     timeDimidx1 = 0;
     timeDimidx2 = 1;
     // output in separate directories
@@ -358,6 +346,14 @@ static void processDimSpecs(void) {
         timeFrom2 = istart2[ timeDimidx2 ];
         timeSteps2 = icount2[ timeDimidx2 ];
     }
+    //if (xstart != NULL) parseDimSpec(xstart, xistart, false, NULL, NULL, NULL);
+    //if (xcount != NULL) parseDimSpec(xcount, xicount, false, NULL, NULL, NULL);
+
+#ifdef VTK
+    // process y
+    //if (ystart != NULL) parseDimSpec(ystart, yistart, false, NULL, NULL, NULL);
+    //if (ycount != NULL) parseDimSpec(ycount, yicount, false, NULL, NULL, NULL);
+#endif
 }
 
 #define PRINT_DIMS(str, v) printf("  %s = { ", str); \
@@ -617,7 +613,7 @@ int plot2DVariables( DataFile dfv, VarInfo vi, char* outspec,
     if (vname && vname[0] == '/') vname++;
 
     // set iterative dimension
-    // FIXME Use SCHEMA here to set timeDimidx2 for each 2D var
+    // Use SCHEMA
     if (timeDimidx2 > -1 && strcmp(vname,"pot0")) {
         // negative index =  last+index
         if (timeFrom2 < 0) tb = vi.dimsize[timeDimidx2] + timeFrom2 % vi.dimsize[timeDimidx2] + dfv.time_start;
@@ -795,8 +791,7 @@ int plot1DVariables( DataFile dfv, VarInfo vi, char* outspec,
         else te = tb + timeSteps1*timeStepping1 - 1;
         // error checking
         if (tb >= vi.dimsize[timeDimidx1] + dfv.time_start) {
-            fprintf(stderr,"Warning: time begin index is > steps available for variable %s\n", vi.name);     
-            return 0;  // not an error but cannot make plots for this variable
+            fprintf(stderr,"Warning: time begin index is > steps available for variable %s\n", vi.name);            return 0;  // not an error but cannot make plots for this variable
         }
         if (te >= vi.dimsize[timeDimidx1] + dfv.time_start) {
             fprintf(stderr,"Warning: time end index is > steps available for variable %s\n", vi.name);
@@ -973,8 +968,6 @@ int checkFile(){
     stat(oneddiagfile, &fileattrib);
     ushort mode = fileattrib.st_mode;
     // printf("Compare: %ld and %ld\n", previous_file_size, fileattrib.st_size);
-    // For testing, 1D file is not growing, but in real monitoring
-    // We need to uncomment the following if else clause
     // FIXME if (fileattrib.st_size == previous_file_size){
     //    printf("file has not increased, wait\n");
     //    return 0;
@@ -1025,7 +1018,7 @@ int do1DWork() {
     Array x = Array_new(undefArray); // we do not know the type yet
     Array y = Array_new(undefArray); // we do not know the type yet
     Array t = Array_new(undefArray); // we do not know the type yet
-    //Array time = Array_new(undefArray); // we do not know the type yet
+    Array time = Array_new(undefArray); // we do not know the type yet
     char outspec[256];
     int i, excode;
     int ntsteps;
@@ -1124,7 +1117,7 @@ int do1DWork() {
         if (!strcmp(df_v.varinfo[i].name,"/psi") || !strcmp(df_v.varinfo[i].name,"/psi_mks"))
             continue;
 
-        // Don't plot variables that are not 2D (1D in time)  
+        // Don't plot variables that are not 2D
         if (df_v.varinfo[i].ndims != 2)
             continue;
 
@@ -1221,7 +1214,7 @@ finalize:    // we jump here in case of errors too
  * the mesh elements.
  * 
  */
-// StoreMesh is no longer being used. When we call parseschema, we should store the meshes
+
 int storeMesh(char *meshfile) {
     DataFile df_x = DataFile_new();
     int i; 
@@ -1314,7 +1307,6 @@ finalize:    // we jump here in case of errors too
     // close data file(s)
     reader_close(df_x);
 
-    printf("called it once ok\n");
     return retval;
 
 }
@@ -1354,6 +1346,17 @@ int plotAll2DVarsForTimeStep( char* datafile)
     // Open minmax file, so that codes deeper in the calls can write/read minmax data
     if (minmaxfile)
         minmax_open(minmaxfile, (use_global_minmax ? 1 : 0));
+
+    // Read nphi first, to make sure we plot all 2D vars
+    if (first_data_read == 0){
+        nphi_v = reader_read_var_byname(df_v, "/nphi", 0, -1);
+        nphi = (int)(Array_doublevalue(nphi_v,0));
+        first_data_read = 1;
+    }
+
+    // DEBUG printf("nphi: %d\n", (int)(Array_doublevalue(nphi_v,0)));
+    // DEBUG printf("nphi: %d\n", (int)(Array_doublevalue(nphi_v,0)));
+    // DEBUG Array_print(nphi_v);
 
     for (i=0; i < df_v.nvars; i++) {
         // Use SCHEMA
@@ -1451,8 +1454,11 @@ finalize:    // we jump here in case of errors too
 // int main (int argc, char ** argv)
 int main (int argc, char * argv[])
 {
-        meshs = (struct schema_mesh_struct *) calloc (1, sizeof (struct schema_mesh_struct));
         err = 0;
+
+        nphi = 0; 
+        first_data_read = 0;
+        nphi_v = Array_new(undefArray);
 
         // What needs to be passed as arguments versus what is reasonably
         // constant at least for a while in EPSi
@@ -1645,7 +1651,7 @@ int main (int argc, char * argv[])
             continue;
         }
 
-        /* 1D main body of work - START */
+        /* 1D main body of work */
         // Check file in question 
         // last_step_processed = 7;
         if (first_check == 0){
@@ -1668,8 +1674,8 @@ int main (int argc, char * argv[])
             printf("Waiting ...\n");
             // Sleep at end of loop instead - sleep(10);
         }
-        /* 1D main body of work - END  */
-        /* 2D main body of work - START*/
+
+        /* 2D main body of work */
         snprintf(current_time_step_string, 32, "%0*d", 5, current_time_step);
         snprintf(latest_time_step_string, 32, "%0*d", 5, current_time_step-1);
         char * currentfile = 0; // = '\0';
@@ -1682,25 +1688,19 @@ int main (int argc, char * argv[])
         if (next_time_step_exists == 1){
             if (current_time_step == 1){
                 // open mesh file
-                //storeMesh(meshfile);
+                storeMesh(meshfile);
                 strcat(datafile,currentfile);
-                // FIXME: in parse schema we should not only store the mesh but also
-                // figure out all about the variables, and call different functions like
-                // plot variable x for time 1 between plane 1 and 2 etc.
-                // At this time, despite parsing some mesh attributes, the plotAll2Dvars function
-                // is still quite arbitrary and timeFix2 is still being set outside of the schema
                 timeFix2 = current_time_step - 1;
-                parseschema(datafile);
                 plotAll2DVarsForTimeStep(datafile);
                 latest_time_step_processed = timeFix2;
                 current_time_step++;
             }else{
                 strcat(datafile,currentfile);
                 timeFix2 = current_time_step - 1;
-                parseschema(datafile);
                 // Here read nphi, that will help not doing tricks to know which
                 // variables to plot while waiting for schema solution 
                 // Scalars do not need to be read it, we get them from the metadata 
+                printf("plot all 2d vars for timestep: %s\n", datafile);
                 plotAll2DVarsForTimeStep(datafile);
                 latest_time_step_processed = timeFix2;
                 current_time_step++;
@@ -1712,6 +1712,8 @@ int main (int argc, char * argv[])
             strcat(datafile,currentfile);
             if (latest_time_step_processed < current_time_step -1){
                 timeFix2 = current_time_step - 1;
+                plotAll2DVarsForTimeStep(datafile);
+                latest_time_step_processed++;
                 printf("Waiting for new data... \n");
                 // Sleep at end of loop instead - sleep(10);
             }else{
@@ -1738,11 +1740,6 @@ int main (int argc, char * argv[])
 #endif
 
    // List directories created 
-   // The following code is also somewhat hardcoded for this code 
-   // For variables that are written every time steps we just need to run
-   // the movie script in the variable directory. But for variables that we 
-   // decompose into planes, we need to go into the sub-directories to run
-   // the movie scripts.
    DIR *dp;
    struct dirent *ep;
    dp = opendir (outpath);
@@ -1815,12 +1812,13 @@ int find_next_step_string(char *str, char *orig)
 int find_next_step( char *str, char ** returnstr){
     DIR *dp;
     struct dirent *ep;
+    //dp = opendir ("../xgc_output");
     dp = opendir (inpath);
     int foundit = 0;
     if (dp != NULL)
     {
         while (ep = readdir (dp)){
-            // puts (ep->d_name);
+            //puts (ep->d_name);
             // returnstr = strdup(ep->d_name); 
             foundit = find_next_step_string(ep->d_name, str);
             //printf("foudid is: %d\n", foundit);
@@ -1955,682 +1953,3 @@ static void parseRGB(char *str, int rgb[3])
         exit(200);
     }
 }
-
-//void parseschema(ADIOS_GROUP *g){
-int parseschema( char* datafile ){
-    int has_schema = 0;
-    ADIOS_FILE    * fp;
-    ADIOS_GROUP   * gp;
-    int  vr, gr, at, i;            
-    enum ADIOS_DATATYPES attr_type;
-    int attr_size;
-    void * data = NULL;
-    void * data2 = NULL;
-    fp = adios_fopen (datafile, MPI_COMM_WORLD); // only rank=0 reads in anything
-    if (fp == NULL) {
-        fprintf(stderr, "readadiosbp: error opening bp file %s:\n%s", datafile, adios_errmsg());
-        return 1;
-    }
-
-    i = 0;  // var index for df.varinfo
-    for (gr=0; gr<fp->groups_count; gr++) {
-        printf("  group %s:\n", fp->group_namelist[gr]);
-        gp = adios_gopen_byid (fp, gr);
-        if (gp == NULL) {
-            fprintf(stderr, "readadiosbp: error opening group %s:\n%s", fp->group_namelist[gr], adios_errmsg());
-            return 1;
-        }
-        printf ("# of groups: %d\n", fp->groups_count);
-        printf ("# of variables: %d\n", fp->vars_count);
-        printf ("# of attributes: %d\n", fp->attrs_count);
-
-        // Does the file have schema
-        // Do this only once since the schema is valid for all groups
-        // Get attributes, /adios_schema/version_major 
-        // and /adios_schema/version_minor
-        int asize; void *adata; enum ADIOS_DATATYPES atype;
-        int attr_exists = 0;
-        char schema_major_version[32];
-        char schema_minor_version[32];
-        strcpy(schema_major_version,"/adios_schema/version_major");
-        strcpy(schema_minor_version,"/adios_schema/version_minor");
-
-        // FIXME: Remove errors when trying to find attributes
-        // Errors could be confusing to user:
-        /*
-         * Example of error:
-ERROR: attribute '/adios_schema/xgc.mesh/mesh-group' is not found! One possible error is to set the view to a specific group and then try to read a attribute of another group. In this case, reset the group view with adios_group_view(fp,-1).
-         */
-        if (has_schema == 0){
-            attr_exists = adios_get_attr(gp, schema_major_version, &atype,&asize, &adata);
-            if (attr_exists == 0){
-                printf("file has schema and major version is: %s\n", (char *)adata);
-                schema_M_attr = strdup(((char *)adata));
-                // File has schema, get minor version
-                attr_exists = adios_get_attr(gp, schema_minor_version, &atype,&asize, &adata);
-
-                if (attr_exists == 0){
-                    printf("file has schema and minor version is: %s\n", (char *)adata);
-                }else{
-                    printf("schema has no minor version\n");
-                    schema_m_attr = strdup(((char *)adata));
-                }
-                has_schema = 1;
-            }else{
-                printf("file does not have schema\n");
-            }
-        }
-
-        // If there is a schema version then continue,
-        // otherwise, don't bother
-        if (has_schema == 0)
-            return 0;
-       
-        char meshindicator[256];
-        char varindicator[256];
-        char meshname[32];
-        // Now see if variables have a mesh attributes & should be plotted
-        for (vr=0; vr<gp->vars_count; vr++) {
-            //printf("variable: %s\n", gp->var_namelist[vr]);
-            strcpy(meshindicator,gp->var_namelist[vr]);
-            strcat(meshindicator,"/adios_schema");
-            attr_exists = adios_get_attr(gp, meshindicator, &atype, &asize, &adata);
-            if (attr_exists == 0){
-                printf("variable: %s has a mesh and it is: %s\n",gp->var_namelist[vr],(char *)adata);
-                strcpy(meshname,(char *)adata);
-                find_mesh_attributes(meshname, gp, fp);
-                // Now variables will have other attributes including
-                // start, stride, count (for hyperslabs)
-                // centering attributes (default to node or cell?)
-                // time series, (how to write out data 
-                // later we could add units etc.
-                // Note: Do this before to determine which portions
-                // of variables are to be plotted, or move the plotting
-                // here right after each variable
-                strcpy(varindicator,gp->var_namelist[vr]);
-                strcat(varindicator,"/adios_schema/centering");
-                attr_exists = adios_get_attr(gp, varindicator, &atype, &asize, &adata);
-                // FIXME: see comments below
-                /*if (attr_exists == 0){
-                    // FIXME: Handle centering info for this variable
-                    // Could also be set at mesh level
-                    // printf("the centering for the variable\n");
-                }else{
-                    // FIXME: Default to some centering option, node, cell etc.
-                    // printf("no centering info for the variable\n");
-                }*/
-                strcpy(varindicator,gp->var_namelist[vr]);
-                strcat(varindicator,"/adios_schema/start");
-                attr_exists = adios_get_attr(gp, varindicator, &atype, &asize, &adata);
-                if (attr_exists == 0){
-                    // Accorind to the number of dimensions we will have
-                    // the same number of starts, strides, and counts
-                    // should have a simple function process this info
-                    // DEBUG printf("\nthis attribute %s exists for variable: %s\n",varindicator,(char *)adata);
-                    /* Put this in a function */
-                
-                    char * c; //space loaction
-                    char * attdata; //attribute data
-                    int counter = 0; 
-                    char counterstr[5] = {0,0,0,0,0};
-                    double starts[5];
-                    int counts[5];
-                    int strides[5]; 
-                    attdata = strdup((char *)adata);
-                    c = strtok(attdata, " ");
-                    while (c)
-                    {
-                        if (number_is_var (c))
-                        {
-                          // FIXME: I think changing this to -1 in schema
-                          // ":" can be confusing but -1 could indicate to
-                          // readl all lines, planes etc.
-                          if (!strcmp(c,":")){
-                              printf("Special case, read all %s,\n", c);
-                          }else{
-                              printf("We have a var to read: %s for hyperslab info\n", c);
-                           }
-                        }else{
-                           printf("We have a number: %s to read for hyperslab info\n", c);
-                        }
-                        c = strtok (NULL, " ");
-                        counter++;
-                    }
-                    // FIXME: repeat work above for strides+counts below
-                    strcpy(varindicator,gp->var_namelist[vr]);
-                    strcat(varindicator,"/adios_schema/stride");
-                    attr_exists = adios_get_attr(gp, varindicator, &atype, &asize, &adata);
-                    // DEBUG printf("\nthis attribute %s exists for variable: %s\n",varindicator,(char *)adata);
-                    strcpy(varindicator,gp->var_namelist[vr]);
-                    strcat(varindicator,"/adios_schema/count");
-                    attr_exists = adios_get_attr(gp, varindicator, &atype, &asize, &adata);
-                    // DEBUG printf("\nthis attribute %s exists for variable: %s\n",varindicator,(char *)adata);
-                    //  FIXME Based on this info, we should know that we need to plot all 2D variables for all times
-                    //  Currently despite reading some attributes calling
-                    //  plotAll2DVars is still somewhat arbitrary and 
-                    //  coded specifically for XGC1 workflow
-                }else
-                {
-                    printf("assuming one image per time step then\n");
-                }
-
-            
-
-            }
-        }
-        adios_gclose (gp);
-    }
-    adios_fclose (fp);
-    return 0;
-}
-
-// Append a mesh to a group
-enum SCHEMA_FLAG adios_append_mesh (struct schema_mesh_struct ** root
-                                 ,struct schema_mesh_struct * mesh
-                                 ,uint16_t id
-                                 )
-{
-    while (root)
-    {
-        if (*root && !strcasecmp ((*root)->name, mesh->name))
-        {
-            return SCHEMA_FLAG_NO;
-        }
-        if (!*root)
-        {
-            *root = mesh;
-            root = 0;
-        }
-        else
-        {
-            root = &(*root)->next;
-        }
-    }
-
-    return SCHEMA_FLAG_YES;
-}
-
-// Define a new mesh
-struct schema_mesh_struct * common_define_mesh (
-        const char * name,
-        enum SCHEMA_MESH_TIME_VARYING time_varying,
-        enum SCHEMA_MESH_FILE schema_mesh_file,
-        enum SCHEMA_MESH_GROUP schema_mesh_group,
-        enum SCHEMA_MESH_TYPE type,
-        char * filename,
-        char * groupname,
-        int time_series_format)
-{
-    //struct adios_group_struct * t = (struct adios_group_struct *) group_id;
-    struct schema_mesh_struct * m = (struct schema_mesh_struct *)
-                               malloc (sizeof (struct schema_mesh_struct));
-    enum SCHEMA_FLAG flag;
-
-    m->name = strdup (name);
-    m->filename = strdup (filename);
-    m->groupname = strdup (groupname);
-    m->time_series_format = time_series_format;
-    m->type = type;
-    m->time_varying = time_varying;
-    m->file = schema_mesh_file;
-    m->group = schema_mesh_group;
-    m->next = 0;
-
-    if (type == 1){
-        m->uniform = (struct schema_mesh_uniform_struct *) calloc (1, sizeof (struct schema_mesh_uniform_struct));
-    }else if (type == 3){
-        m->rectilinear = (struct schema_mesh_rectilinear_struct *) calloc (1, sizeof (struct schema_mesh_rectilinear_struct));
-    }else if (type == 2){
-        m->structured = (struct schema_mesh_structured_struct *) calloc (1, sizeof (struct schema_mesh_structured_struct));
-    }else if (type == 4){
-        m->unstructured = (struct schema_mesh_unstructured_struct *) calloc (1, sizeof (struct schema_mesh_unstructured_struct));
-    }else{
-        m->uniform = (struct schema_mesh_uniform_struct *) calloc (1, sizeof (struct schema_mesh_uniform_struct));
-    }
-    flag = adios_append_mesh (meshs, m, mesh_count);
-    if (flag == SCHEMA_FLAG_NO)
-    {
-        printf ("config.xml: unique mesh names required; "
-                         "second mesh: %s will be ignored.\n"
-                         ,name
-                );
-        free(m);
-        m = 0;
-    } else {
-        mesh_count++;
-    }
-
-    return m;
-}
-
-// Find a mesh by name
-struct schema_mesh_struct * find_mesh_by_name (struct schema_mesh_struct * root
-                                                 ,const char * name
-                                                 )
-{
-    int done = 0;
-    struct schema_mesh_struct * mesh = 0;
-
-    if (!name)
-        done = 1;
-
-    while (!done && root)
-    {
-        if (!strcasecmp (name, root->name))
-        {
-            done = 1;
-            mesh = root;
-        }
-        else
-        {
-            root = root->next;
-        }
-    }
-
-    return mesh;
-}
-
-// Find  mesh all mesh attributes available given the name
-void find_mesh_attributes ( char meshname[32], ADIOS_GROUP * gp, ADIOS_FILE    * fp)
-{
-    // Need to add centering option at mesh level also
-    char meshindicator[256];
-    strcpy(meshindicator,"/adios_schema/");
-    strcat(meshindicator,meshname);
-    char * type=0, * time_varying=0, * file=0, * group=0, * time_series_format=0;
-  
-    // Variables expected by define mesh
-    enum SCHEMA_FLAG mtvarying = SCHEMA_FLAG_NO;
-    enum SCHEMA_MESH_FILE mfile = SCHEMA_FLAG_NO;
-    enum SCHEMA_FLAG mgroup = SCHEMA_FLAG_NO;
-    enum SCHEMA_FLAG mtype = SCHEMA_MESH_UNIFORM;
-
-    // First get the basics
-    int attr_exists = 0;
-    int asize;
-    void *adata;
-    enum ADIOS_DATATYPES atype;
-    char searchattr[256];
-    // Type of mesh?
-    strcpy(searchattr,"/adios_schema/");
-    strcat(searchattr,meshname);
-    strcat(searchattr,"/type"); 
-    attr_exists =  adios_get_attr(gp, searchattr, &atype, &asize, &adata);
-    // DEBUG printf("looking for: %s, the mesh type is: %s\n", searchattr, (char *) adata);
-    // Mesh type is required, so the previous attribute should always exist
-    // just in case, default to uniform mesh
-    if (attr_exists != 0){
-        mtype = SCHEMA_MESH_UNIFORM;
-    }else{
-        if (!strcmp("uniform",(char*)adata)){
-            mtype = SCHEMA_MESH_UNIFORM;
-        }else if (!strcmp("structured",(char*)adata)){
-            mtype = SCHEMA_MESH_STRUCTURED;
-        }else if (!strcmp("rectilinear",(char*)adata)){
-            mtype = SCHEMA_MESH_RECTILINEAR;
-        }else if (!strcmp("unstructured",(char*)adata)){
-            mtype = SCHEMA_MESH_UNSTRUCTURED;
-        }else{ // Typo? Should alert the user and return FIXME
-            mtype = SCHEMA_MESH_UNIFORM;
-        }
-    }
-    
-    // Time varying may be ommitted and will be set to "no" by default
-    // Reset search attr
-    strcpy(searchattr,"");
-    // Time varying?
-    strcpy(searchattr,"/adios_schema/");
-    strcat(searchattr,meshname);
-    strcat(searchattr,"/time-varying"); 
-    attr_exists =  adios_get_attr(gp, searchattr, &atype, &asize, &adata);
-    // DEBUG printf("looking for: %s, the mesh type is: %s\n", searchattr, (char *) adata);
-    if (attr_exists != 0){
-        mtvarying = SCHEMA_MESH_TIME_VARY_NO;
-    }else if (!strcmp("yes",(char *)adata)){
-        mtvarying = SCHEMA_MESH_TIME_VARY_YES;
-    }else if (!strcmp("no", (char *)adata)){
-        mtvarying = SCHEMA_MESH_TIME_VARY_NO;
-    }else{ // Type? Should alert the user and return FIXME
-        mtvarying = SCHEMA_MESH_TIME_VARY_NO;
-    }
-
-    // Reset search attr
-    strcpy(searchattr,"");
-    // Mesh file? 
-    strcpy(searchattr,"/adios_schema/");
-    strcat(searchattr,meshname);
-    strcat(searchattr,"/mesh-file"); 
-    attr_exists =  adios_get_attr(gp, searchattr, &atype, &asize, &adata);
-    // DEBUG printf("looking for: %s, the mesh type is: %s\n", searchattr, (char *) adata);
-    if (attr_exists != 0){
-       mfile = SCHEMA_FLAG_NO;
-       file = "";
-    }else{
-       mfile = SCHEMA_FLAG_YES;
-       file = strdup((char *)adata);
-    }
-
-    // Reset search attr
-    strcpy(searchattr,"");
-    // Mesh group? 
-    strcpy(searchattr,"/adios_schema/");
-    strcat(searchattr,meshname);
-    strcat(searchattr,"/mesh-group"); 
-    attr_exists =  adios_get_attr(gp, searchattr, &atype, &asize, &adata);
-    // DEBUG printf("looking for: %s, the mesh type is: %s\n", searchattr, (char *) adata);
-    if (attr_exists != 0){
-        mgroup = SCHEMA_FLAG_NO;
-        group = "";
-    }else{
-        mgroup = SCHEMA_FLAG_YES;
-        group = strdup((char*)adata);
-    }
-
-    // DEBUG printf("We need to know about type:%d, timevarying: %d, mesh-file: %s and mesh group: %s\n",mtype, mtvarying, file, group);
-
-    // FIXME for now fixing the time-series formatattribute at 5
-    // varname.XXXXX.png for EPSi (but should fix schema to enable
-    // setting this variable
-    int m_t_s_format = 5;
-    struct schema_mesh_struct * mes;
-    mes = common_define_mesh (meshname,mtvarying,mfile,mgroup,mtype,file,group,m_t_s_format);
-    if (mes){
-        printf("Success: Could add a mesh\n");
-    }else{
-        // If mesh alread exists do not print an error
-        // DEBUG printf("Error: Could not add a mesh\n");
-    }
-
-    // Now in more details, reconstruct the mesh
-    // according to mesh types
-    if(mtype == SCHEMA_MESH_UNIFORM){
-        //parseMeshUniform(&mes->uniform,res);
-    }else if (mtype == SCHEMA_MESH_STRUCTURED){
-        //parseMeshStructured(&mes->structured,res);
-    }else if (mtype == SCHEMA_MESH_RECTILINEAR){
-        //parseMeshRectilinear(&mes->rectilinear,res);
-    }else if (mtype == SCHEMA_MESH_UNSTRUCTURED){
-        parseMeshUnstructured(meshname,&mes->unstructured,file,group, gp, fp);
-    }
-
-    return ;
-}
-
-int parseMeshUnstructured (char meshname[32], struct schema_mesh_unstructured_struct ** mesh, char * mesh_file, char * meshgroup, ADIOS_GROUP * gp, ADIOS_FILE    * fp){
-    char meshindicator[256];
-    strcpy(meshindicator,"/adios_schema/");
-    strcat(meshindicator,meshname);
-    int attr_exists = 0;
-    int asize;
-    void *adata;
-    enum ADIOS_DATATYPES atype;
-    char searchattr[256];
-    char attrvalue[256];
-
-    // FIXME check for centering attribute of mesh as well
-    // First check mesh file and mesh group values, that will determine
-    // where to check for variables
-
-    DataFile df_x = DataFile_new();
-    int i;
-    double min_x = xmin, max_x = xmax; // min_y = ymin, max_y = ymax;
-#ifdef VTK
-    int ndims_x, ndims_y, dimx, dimy; // temp vars for error checking
-#endif
-    bool outpath_is_dir;
-    int retval = 0;
-
-    outpath_is_dir  = is_dir(outpath); 
-
-    if (!strcmp(mesh_file,"")){
-        printf("there is NOT a mesh_file: \n");
-        // FIXME: Do this case.
-    }else{
-        printf("there is a mesh_file: %s\n", mesh_file);
-        char fullmeshpath[256];
-        strcpy(fullmeshpath, inpath);
-        strcat(fullmeshpath,"/");
-        strcat(fullmeshpath,mesh_file);
-        // DEBUG printf("there is a inpath: %s\n", fullmeshpath);
-        _tstart();
-        df_x = reader_open(fullmeshpath, adiosbp_file, nameattr);
-        _tend();
-        _tdiff(&tp);
-
-        // Now is there also a mesh group?
-        if (!strcmp(meshgroup,"")){
-            printf("there is no mesh group\n");
-            // Open the group - don't need the group name, can use grouname[0]
-            // Nspace?
-            Array nsp; 
-            double nspace;
-            int ncsets;
-            strcpy(searchattr,"/adios_schema/");
-            strcat(searchattr,meshname);
-            strcat(searchattr,"/nspace"); 
-            attr_exists =  adios_get_attr(gp, searchattr, &atype, &asize, &adata);
-            if (attr_exists == 0){
-                switch (atype)
-                {
-                    case adios_integer:
-                        // DEBUG printf ("%d\n", *(int *)adata);
-                        nspace = *(int *) adata;
-                        break;
-                    case adios_double:
-                        // DEBUG printf ("%e\n", *(double *)adata);
-                        nspace = *(double *)adata;
-                        break;
-                    case adios_string:
-                        strcpy(attrvalue,((char *)adata));
-                        nsp = reader_read_var_byname(df_x, attrvalue, 0, -1);
-                        //strcpy(attrvalue,("/n_n"));
-                        if (Array_errno(nsp)){
-                            // Do not die since nspace is not required
-                            printf("Error reading variable: %s from file: %s\n", attrvalue, fullmeshpath);
-                        }else{
-                            nspace = (double) (Array_doublevalue(nsp, 0));
-                        }
-                        // DEBUG printf ("%s\n", (char *)adata);
-                        break;
-                    default:
-                        printf ("??????\n");
-                }
-            }
-            // Points - Single var or multi var?
-            strcpy(searchattr,"/adios_schema/");
-            strcat(searchattr,meshname);
-            strcat(searchattr,"/points-single-var"); 
-            attr_exists =  adios_get_attr(gp, searchattr, &atype, &asize, &adata);
-            if (attr_exists == 0){
-                // DEBUG printf("attribute exists and its value is: %s\n", (char *)adata);
-                // FIXME read mesh dimensions and points var dimensions
-                // to correctly set xistart2 and xicount2
-                _tstart();
-                x2 = reader_read_var_byname(df_x, (char *)adata, xistart2, xicount2);
-                _tend();
-                _tdiff(&tp);
-                if ( Array_errno(x2) ) {
-                    fprintf(stderr, "\nError: could not read x var %s from %s\n", (char *)adata, fullmeshpath);
-                    retval=3; goto finalize;
-                }
-                if (isnan(min_x)) min_x = Array_min(x2); // if xmin is not argument, get from array
-                if (isnan(max_x)) max_x = Array_max(x2);
-            
-                // Get ncsets to decide wheter it is the uniform vs mixed
-                // cells case 
-                strcpy(searchattr,"/adios_schema/");
-                strcat(searchattr,meshname);
-                strcat(searchattr,"/ncsets"); 
-                attr_exists =  adios_get_attr(gp, searchattr, &atype, &asize, &adata);
-                // Attributes should always exists (generated by schema)
-                if (attr_exists == 0){
-                    // DEBUG printf("this attribute exists and its value is: %e\n", *(double *)adata);
-                    ncsets = (int) (*(double *)adata);
-                    if (ncsets == 1){
-                       printf("Uniform cells case\n");
-                       double ccount = 0;
-                       Array cc;
-                       char ctype[32];
-                       // Get cell count
-                       strcpy(searchattr,"/adios_schema/");
-                       strcat(searchattr,meshname);
-                       strcat(searchattr,"/ccount"); 
-                       attr_exists =  adios_get_attr(gp, searchattr, &atype, &asize, &adata);
-                       if (attr_exists == 0){
-                           switch (atype)
-                           {
-                               printf("Attribute exists and its value is: %s\n", (char *)adata);
-                               case adios_integer:
-                                   printf ("%d\n", *(int *)adata);
-                                   ccount =(double)(*(int *) adata);
-                                   break;
-                               case adios_double:
-                                   printf ("%e\n", *(double *)adata);
-                                   ccount = *(double *)adata;
-                                   break;
-                               case adios_string:
-                                   strcpy(attrvalue,((char *)adata));
-                                   // FIXME: Cannot forget the "/" for
-                                   // the variable names or add it here
-                                   // DEBUG strcpy(attrvalue,("/n_t"));
-                                   // n_t is a variable that does exist
-                                   // in xgc.mesh.bp, unlike value in test
-                                   // bp file
-                                   cc = reader_read_var_byname(df_x, attrvalue, 0, -1);
-                                   if (Array_errno(cc)){
-                                       // Do not die since cell count is not required
-                                       printf("Error reading variable: %s from file: %s\n", attrvalue, fullmeshpath);
-                                   }else{
-                                       ccount = (double) (Array_doublevalue(cc, 0));
-                                       // DEBUG printf("ccount is: %e\n", ccount);
-                                   }
-                                   break;
-                               default:
-                                   printf ("??????\n");
-                           }
-                       }else{
-                           printf("Error there is no cell count\n");
-                           // Do not return since we may be able to
-                           // get it from the dimensions of cdata
-                       }
-#ifdef VTK
-                       // Now get the cell type
-                       strcpy(searchattr,"/adios_schema/");
-                       strcat(searchattr,meshname);
-                       strcat(searchattr,"/ctype"); 
-                       attr_exists =  adios_get_attr(gp, searchattr, &atype, &asize, &adata);
-                       if (attr_exists == 0){
-                           // DEBUG printf("Attribute exists and its value is: %s\n", (char *)adata);
-                           // FIXME: Handle all cell types
-                           strcpy(ctype,(char *)adata);
-                           if (!strcmp(ctype,"triangle") || !strcmp(ctype,"tri")){
-                               do_trianglemesh = 1;
-                           }else{
-                               // FIXME Need to handle all cell types
-                               printf("Need to handle all cell type cases\n");
-                               retval = 7; goto finalize;
-                           }
-                       }else{
-                           printf("Error no cell type, return\n");
-                               retval = 7; goto finalize;
-                       }
-
-                       // Get cell data now
-                       strcpy(searchattr,"/adios_schema/");
-                       strcat(searchattr,meshname);
-                       strcat(searchattr,"/cdata"); 
-                       attr_exists =  adios_get_attr(gp, searchattr, &atype, &asize, &adata);
-                       if (attr_exists == 0){
-                           // DEBUG printf("this attribute exists and its value is: %s\n", (char *)adata);
-                           // FIXME read mesh dimensions and cell count
-                           // to correctly calculate yicount2 and yistart2
-                           _tstart();
-                           y2 = reader_read_var_byname(df_x, (char *)adata, yistart2, yicount2);
-                           _tend();
-                           _tdiff(&tp);
-                           if ( Array_errno(y2) ) {
-                               printf("Error: could not read y var %s from %s\n", (char *)adata, fullmeshpath);
-                               retval=5; goto finalize;
-                           }
-                           // must be the same number of dimensions as x (and x exist if we are at this point)
-                           ndims_x = Array_getDimensions(x2);
-                           ndims_y = Array_getDimensions(y2);
-                           if (ndims_x != ndims_y) {
-                               printf("Error: # of dimensions of x (=%d) and y (=%d) must be the same for 2D plots\n", ndims_x, ndims_y);
-                               retval=6; goto finalize;
-                           }
-                       }else{
-                           printf("No cell data, return\n");
-                           retval = 4; goto finalize;
-                       }
-#endif 
-                    }else if (ncsets > 1){
-                       // FIXME: Do this case
-                       printf("Mixed cells case. Not implemented yet\n");
-                       retval = 3; goto finalize;
-                    }else{
-                        printf("Error: Invalid number for ncsets\n");
-                        retval = 3; goto finalize;
-                    }
-                }else{
-                    printf("Error: Could not find ncsets\n");
-                    retval = 3; goto finalize;
-                }
-            }else{
-                strcpy(searchattr,"/adios_schema/");
-                strcat(searchattr,meshname);
-                strcat(searchattr,"/points-muli-var"); 
-                attr_exists =  adios_get_attr(gp, searchattr, &atype, &asize, &adata);
-                if (attr_exists == 0){
-                    // FIXME Do this case
-                    printf("Points-multi-var case. Not implemented yet\n");
-                    retval = 3; goto finalize;
-                }else{
-                    printf("Points attribute do not exist. Return.\n");
-                    retval = 4; goto finalize;
-                }
-            }
-        }else{
-            // FIXME: Do this case
-            printf("There is a mesh group within the mesh file. Not implemented yet.\n");
-            retval = 3; goto finalize;
-        }
-    }
-
-    // Open minmax file, so that codes deeper in the calls can write/read minmax data
-    if (minmaxfile)
-        minmax_open(minmaxfile, (use_global_minmax ? 1 : 0));
-
-finalize:    // we jump here in case of errors too
-
-    if (minmaxfile)    minmax_close();
-
-    // close data file(s)
-    reader_close(df_x);
-
-    return retval;
-
-}
-
-int number_is_var (const char * temp) // 1 == yes, 0 == no
-{
-    if (!temp)
-        return 1;
-
-    if (*temp == '-' || isdigit (*temp))
-    {
-        temp++;
-        while (*temp)
-        {
-            if (isdigit (*temp))
-                temp++;
-            else
-                return 1;
-        }
-    }
-    else
-        return 1;
-
-    return 0;
-}
-
