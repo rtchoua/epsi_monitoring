@@ -1805,6 +1805,9 @@ int find_next_step_string(char *str, char *orig)
   if(!(p = strstr(str, orig)))  // Is 'orig' even in 'str'?
     return 0;
 
+  if(!(p = strstr(str, "bp")))  // Is 'bp' in 'str'?
+    return 0;
+  
   return 1;
 
 }
