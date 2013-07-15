@@ -614,7 +614,7 @@ int plot2DVariables( DataFile dfv, VarInfo vi, char* outspec,
 
     // set iterative dimension
     // Use SCHEMA
-    if (timeDimidx2 > -1 && strcmp(vname,"pot0")) {
+    if (timeDimidx2 > -1 && strcmp(vname,"pot0") && strcmp(vname,"potm0")) {
         // negative index =  last+index
         if (timeFrom2 < 0) tb = vi.dimsize[timeDimidx2] + timeFrom2 % vi.dimsize[timeDimidx2] + dfv.time_start;
         else tb = timeFrom2;
@@ -640,7 +640,7 @@ int plot2DVariables( DataFile dfv, VarInfo vi, char* outspec,
     if (verbose) printf("variable %s ...\n", vname);
     for (iter = tb; iter <= te; iter+=timeStepping2) {
         if (verbose) printf("  iteration %d ...\n",iter);
-        if (timeDimidx2 > -1 && strcmp(vname,"pot0")) {
+        if (timeDimidx2 > -1 && strcmp(vname,"pot0")  && strcmp(vname,"potm0")) {
             istart2[timeDimidx2] = iter;
             icount2[timeDimidx2] = 1;
             // make the output name idx string based on iter and variable t
@@ -1691,6 +1691,7 @@ int main (int argc, char * argv[])
                 storeMesh(meshfile);
                 strcat(datafile,currentfile);
                 timeFix2 = current_time_step - 1;
+                printf("datafile: %s\n",datafile);
                 plotAll2DVarsForTimeStep(datafile);
                 latest_time_step_processed = timeFix2;
                 current_time_step++;
@@ -1701,6 +1702,7 @@ int main (int argc, char * argv[])
                 // variables to plot while waiting for schema solution 
                 // Scalars do not need to be read it, we get them from the metadata 
                 printf("plot all 2d vars for timestep: %s\n", datafile);
+                printf("datafile: %s\n",datafile);
                 plotAll2DVarsForTimeStep(datafile);
                 latest_time_step_processed = timeFix2;
                 current_time_step++;
@@ -1712,6 +1714,7 @@ int main (int argc, char * argv[])
             strcat(datafile,currentfile);
             if (latest_time_step_processed < current_time_step -1){
                 timeFix2 = current_time_step - 1;
+                printf("datafile: %s\n",datafile);
                 plotAll2DVarsForTimeStep(datafile);
                 latest_time_step_processed++;
                 printf("Waiting for new data... \n");
